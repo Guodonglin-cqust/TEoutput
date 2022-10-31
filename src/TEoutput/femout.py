@@ -35,10 +35,10 @@ class Segment(ABC):
     @property
     @abstractmethod
     def profile(self):
-        R_cum = ...         # integral(Rho, dL)/A           , mOhm
+        R_cum = ...         # integral(1/C, dL)/A           , mOhm
         S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        K_cum = ...         # integral(1/Rth*(-dT/dx), dL)*A, W*mm
-        Rx_cum = ...        # integral(x*Rho, dL/A)         , mOhm.mm
+        K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W*mm
+        Rx_cum = ...        # integral(x/C, dL/A)         , mOhm.mm
         Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
         ST_cum = ...        # integral(T*S, dL)             , mV.mm
         return R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum
@@ -63,18 +63,16 @@ class BulkSegment(Segment):
                  Length=1, Area=100, Perimeter=40,
                  Ngrid=101):
         if isPoly: 
-            Rho, S, Rth = props
-            self._Rho = Rho
+            C, S, K = props
+            self._C = C
             self._S = S
-            self._Rth = Rth
+            self._K = K
             self._datas = props
         else:
             T, C, S, K = props
-            Rho = 1E4/C
-            Rth = 1/K
-            self._Rho = lambda Ti: np.interp(Ti, T, Rho)
-            self._S   = lambda Ti: np.interp(Ti, T, S)
-            self._Rth = lambda Ti: np.interp(Ti, T, Rth)
+            self._C = lambda Ti: np.interp(Ti, T, C)
+            self._S = lambda Ti: np.interp(Ti, T, S)
+            self._K = lambda Ti: np.interp(Ti, T, K)
         self.Length = Length
         self.Area = Area
         self.Perimeter = Perimeter
@@ -83,24 +81,24 @@ class BulkSegment(Segment):
         self._T_x = np.ones(Ngrid)                  # K
         self._dT_x = np.zeros(Ngrid)                # K/mm
     
-    def Rho_S_Rth(self, x):
+    def props_x(self, x):
         Tx = np.interp(x, self._ix, self._T_x)
-        return self._Rho(Tx), self._S(Tx), self._Rth(Tx)
-    
-    def Rho(self, x):
-        return self.Rho_S_Rth(x)[0]
-    
-    def S(self, x):
-        return self.Rho_S_Rth(x)[1]
-    
-    def Rth(self, x):
-        return self.Rho_S_Rth(x)[2]
+        return self._C(Tx), self._S(Tx), self._K(Tx)
     
     def C(self, x):
-        return 1E4 / self.Rho_S_Rth(x)[0]
+        return self.props_x(x)[0]
+    
+    def S(self, x):
+        return self.props_x(x)[1]
     
     def K(self, x):
-        return 1/self.Rho_S_Rth(x)[2]
+        return self.props_x(x)[2]
+    
+    def Rho(self, x):
+        return 1E4 / self.props_x(x)[0]
+    
+    def Rth(self, x):
+        return 1/self.props_x(x)[2]
     
     @property
     def profile(self):
@@ -109,7 +107,7 @@ class BulkSegment(Segment):
         T_x = self._T_x                 # K
         dT_x = (-1)*self._dT_x          # K/mm
         
-        Rho_x = self._Rho(T_x)          # uOhm.m <--> mOhm.mm
+        Rho_x = 1E4 / self._C(T_x)      # S/cm --> uOhm.m <--> mOhm.mm
         R_cum = trapz(Rho_x, xi)/Area   # mOhm
         Rx_cum = trapz(xi*Rho_x, xi)/Area   # mOhm.mm
         
@@ -118,12 +116,12 @@ class BulkSegment(Segment):
         Sx_cum = trapz(xi*S_x*dT_x, xi) # mV.mm
         ST_cum = trapz(S_x*T_x, xi)     # mV.mm
         
-        K_x = 1E-3 / self._Rth(T_x)     # W/(m.K) --> W/(mm.K)
+        K_x = 1E-3 * self._K(T_x)       # W/(m.K) --> W/(mm.K)
         K_cum = trapz(K_x*dT_x, xi)*Area    # W*mm
         
         # R_cum = ...         # integral(Rho, dL)/A           , mOhm
         # S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        # K_cum = ...         # integral(1/Rth*(-dT/dx), dL)*A, W*mm
+        # K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W*mm
         # Rx_cum = ...        # integral(x*Rho, dL/A)         , mOhm.mm
         # Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
         # ST_cum = ...        # integral(T*S, dL)             , mV.mm
@@ -133,12 +131,12 @@ class BulkSegment(Segment):
         Area = self.Area                # mm^2
         Ta, Tb = self.endtemp           # K
         dTa, dTb = self.gradtemp        # K/mm
-        Rth_a = 1E3 * self._Rth(Ta)     # m.K/W --> mm.K/W
-        Rth_b = 1E3 * self._Rth(Tb)
+        K_a = 1E3 * self._K(Ta)         # m.K/W --> mm.K/W
+        K_b = 1E3 * self._K(Tb)
         S_a = 1E-6 * self._S(Ta)        # uV/K  --> V/K
         S_b = 1E-6 * self._S(Tb)
-        qa = S_a*Ta*I-dTa/Rth_a*Area    # W
-        qb = S_b*Tb*I-dTb/Rth_b*Area    
+        qa = S_a*Ta*I-K_a*dTa*Area      # W
+        qb = S_b*Tb*I-K_b*dTb*Area    
         return qa, qb
     
     def phix(self, I):
@@ -147,13 +145,13 @@ class BulkSegment(Segment):
         T_x = self._T_x                 # K
         dT_x = self._dT_x               # K/mm
         S_x = 1E-6 * self._S(T_x)       # uV/K   --> V/K
-        Rho_x = 1E-3 * self._Rho(T_x)   # uOhm.m --> Ohm.mm
-        Rth_x = 1E3 * self._Rth(T_x)    # m.K/W  --> mm.K/W
+        Rho_x = 1E1 / self._C(T_x)      # S/cm   --> Ohm.cm  --> Ohm.mm
+        K_x = 1E-3 * self._K(T_x)       # W/(m.K) --> W/(mm.K)
         S_cum = cumtrapz(S_x*dT_x, xi, initial=0)   # V
         Rho_cum = cumtrapz(Rho_x, xi, initial=0)    # Ohm.mm^2
         phi_r = (S_cum+I*Rho_cum/Area)          # W/A = V
-        ux = (S_x*T_x-phi_r)*Rth_x/Area         # K/mm/A
-        vx = Rth_x/Area                         # K/W/mm 
+        ux = (S_x*T_x-phi_r)/(Area*K_x)         # K/mm/A
+        vx = 1/(Area*K_x)                       # K/W/mm 
         ux_cum = cumtrapz(ux, xi, initial=0)    # K/A
         vx_cum = cumtrapz(vx, xi, initial=0)    # K/W
         return phi_r, ux, vx, ux_cum, vx_cum
@@ -215,7 +213,7 @@ class LayerSegment(Segment):
         
         # R_cum = ...         # integral(Rho, dL)/A           , mOhm
         # S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        # K_cum = ...         # integral(1/Rth*(-dT/dx), dL)*A, W/mm
+        # K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W/mm
         # Rx_cum = ...        # integral(x*Rho, dL/A)         , mOhm.mm
         # Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
         # ST_cum = ...        # integral(T*S, dL)             , mV.mm
@@ -367,7 +365,7 @@ class Element(ABC):
         else:
             succeed = False
 
-        return Jphi_Ta, Jphi_Tb, Vdiff, succeed, rsts
+        return Jphi_Ta, Jphi_Tb, Vdiff, Ix, succeed, rsts
         
     def _get_phi_t2(self, I):
         phixs = [seg.phix(I) for seg in self.segments]
@@ -485,12 +483,13 @@ class GenElement(Element):
         logger.info('Begin simulating where %s ...', mode)
             
         args = [I, CSA, maxiter, miniter, mixing, tol]
-        Jphi_Th, Jphi_Tc, Vdiff, succeed, rsts = super().simulate(*args)
+        Jphi_Th, Jphi_Tc, Vdiff, Ix, succeed, rsts = super().simulate(*args)
         if not succeed:
             results = None
             logger.info('Stop simulating for reaching maxiter')
         else:
             results = AttrDict()
+            results['I'] = Ix
             results['Vout'] = Vdiff
             results['Qhot'] = Jphi_Th
             results['Pout'] = Jphi_Th - Jphi_Tc
@@ -557,7 +556,7 @@ class GenElement(Element):
         return prfs     # Voc, Rin, Isc, Tp, mopt
     
     @classmethod
-    def valuate(cls, Th, Tc, segments, mode='MaxYita'):
+    def valuate(cls, Th, Tc, segments, mode='YitaMax'):
         gen = cls(Th, Tc, segments)
         gen.build()
         results = gen.simulate(I=mode)
