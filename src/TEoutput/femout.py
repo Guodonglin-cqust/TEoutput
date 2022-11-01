@@ -50,12 +50,13 @@ class Segment(ABC):
     
     @abstractmethod
     def phix(self, I):
-        phi_r = ...         # W/A = V
-        ux = ...            # K/mm/A, same as dT_x/I
+        Jphi_r = ...        # W
+        ux = ...            # K/mm  , same as dT_x
         vx = ...            # K/W/mm, same as dT_x/Jphi_r
-        ux_cum = ...        # K/A, same as T_x/I
+        ux_cum = ...        # K  , same as T_x
         vx_cum = ...        # K/W, same as T_x/Jphi_r
-        return phi_r, ux, vx, ux_cum, vx_cum
+        vdf = ...           # mV
+        return Jphi_r, ux, vx, ux_cum, vx_cum, vdf
     
 class BulkSegment(Segment):
     def __init__(self, props, isPoly=False, 
@@ -148,11 +149,20 @@ class BulkSegment(Segment):
         S_cum = cumtrapz(S_x*dT_x, xi, initial=0)   # V
         Rho_cum = cumtrapz(Rho_x, xi, initial=0)    # Ohm.mm^2
         phi_r = (S_cum+I*Rho_cum/Area)          # W/A = V
-        ux = (S_x*T_x-phi_r)/(Area*K_x)         # K/mm/A
+        Jphi_r = I*phi_r                        # W
+        ux = (I*S_x*T_x-Jphi_r)/(Area*K_x)      # K/mm
         vx = 1/(Area*K_x)                       # K/W/mm 
-        ux_cum = cumtrapz(ux, xi, initial=0)    # K/A
+        ux_cum = cumtrapz(ux, xi, initial=0)    # K
         vx_cum = cumtrapz(vx, xi, initial=0)    # K/W
-        return phi_r, ux, vx, ux_cum, vx_cum
+        vdf = 1E3 * phi_r[-1]                   # mV
+    
+        # Jphi_r = ...        # W
+        # ux = ...            # K/mm  , same as dT_x
+        # vx = ...            # K/W/mm, same as dT_x/Jphi_r
+        # ux_cum = ...        # K  , same as T_x
+        # vx_cum = ...        # K/W, same as T_x/Jphi_r
+        # vdf = ...           # mV
+        return Jphi_r, ux, vx, ux_cum, vx_cum, vdf
 
 class LayerSegment(Segment):
     Rc = None   # uOhm.cm^2
@@ -239,11 +249,20 @@ class LayerSegment(Segment):
         vx_cum = np.zeros(Ngrid)
         
         phi_r[-1] = (S*(Tb-Ta)+I*Rc/Area)   # W/A = V
-        ux = S*T_x - phi_r                  # W/A = V
-        vx = np.ones_like(phi_r)            # 1, different with super Segment()
-        ux_cum[-1] = (S*Ta-1/2*I*Rc/Area)*Kc/Area   # K/A
-        vx_cum[-1] = Kc/Area                        # K/W, same with the super()
-        return phi_r, ux, vx, ux_cum, vx_cum
+        Jphi_r = I*phi_r                    # W
+        ux = I*S*T_x - Jphi_r               # W
+        vx = np.ones_like(Jphi_r)           # 1, different with super Segment()
+        ux_cum[-1] = I*(S*Ta-1/2*I*Rc/Area)*Kc/Area # K
+        vx_cum[-1] = Kc/Area                # K/W, same with the super()
+        vdf = 1E3 * phi_r[-1]               # mV
+        
+        # Jphi_r = ...        # W
+        # ux = ...            # K/mm  , same as dT_x
+        # vx = ...            # K/W/mm, same as dT_x/Jphi_r
+        # ux_cum = ...        # K  , same as T_x
+        # vx_cum = ...        # K/W, same as T_x/Jphi_r
+        # vdf = ...           # mV
+        return Jphi_r, ux, vx, ux_cum, vx_cum, vdf
 
 class Element(ABC):
     def __init__(self, Ta=None, Tb=None, segments=None, CSA=100):
@@ -367,29 +386,29 @@ class Element(ABC):
     def _get_phi_t2(self, I):
         phixs = [seg.phix(I) for seg in self.segments]
             
-        ux_cums, vx_cums, phi_cums, phi_vx_cums = [], [], [], []
-        phi_cum_v = 0
+        ux_cums, vx_cums, Jphi_cums, Jphi_vx_cums = [], [], [], []
+        Jphi_cum_v, Vdiff = 0, 0
         for phix in phixs:
-            phi_r, _, _, ux_cum, vx_cum = phix
+            Jphi_r, _, _, ux_cum, vx_cum, vdf = phix
             ux_cums.append(ux_cum[-1])
             vx_cums.append(vx_cum[-1])
-            phi_cums.append(phi_cum_v)
-            phi_vx_cums.append(phi_cum_v*vx_cum[-1])
-            phi_cum_v += phi_r[-1]
+            Jphi_cums.append(Jphi_cum_v)
+            Jphi_vx_cums.append(Jphi_cum_v*vx_cum[-1])
+            Jphi_cum_v += Jphi_r[-1]
+            Vdiff += vdf
         
         Ta, Tb = self.endtemp
-        Jphi_Ta = ((Ta-Tb)+I*(sum(ux_cums)-sum(phi_vx_cums)))/sum(vx_cums)
-        Jphi_Tb = Jphi_Ta + I*phi_cum_v
-        Vdiff = 1E3*phi_cum_v    # phi_Tb - phi_Ta in mV
+        Jphi_Ta = ((Ta-Tb)+(sum(ux_cums)-sum(Jphi_vx_cums)))/sum(vx_cums)
+        Jphi_Tb = Jphi_Ta + Jphi_cum_v
         
         T_cum_v = Ta
         dT_x2 = []
         T_x2 = []
-        for phix, phi_cum_i in zip(phixs, phi_cums):
-            _, ux, vx, ux_cum, vx_cum = phix
-            Jphi_Ta_i = Jphi_Ta+I*phi_cum_i
-            dT_x_i = I*ux - Jphi_Ta_i*vx
-            T_x_i = T_cum_v + I*ux_cum - Jphi_Ta_i*vx_cum
+        for phix, Jphi_cum_i in zip(phixs, Jphi_cums):
+            _, ux, vx, ux_cum, vx_cum, _ = phix
+            Jphi_Ta_i = Jphi_Ta+Jphi_cum_i
+            dT_x_i = ux - Jphi_Ta_i*vx
+            T_x_i = T_cum_v + ux_cum - Jphi_Ta_i*vx_cum
             T_cum_v = T_x_i[-1]
             dT_x2.append(dT_x_i)
             T_x2.append(T_x_i)
