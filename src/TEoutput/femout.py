@@ -32,14 +32,13 @@ class Segment(ABC):
         fmt = dsp.format(clsname, self.Length, self.Area, self.Perimeter)
         return fmt
     
-    @property
     @abstractmethod
-    def profile(self):
+    def get_cums(self):
         R_cum = ...         # integral(1/C, dL)/A           , mOhm
-        S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W*mm
-        Rx_cum = ...        # integral(x/C, dL/A)         , mOhm.mm
-        Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
+        S_cum = ...         # integral(S*(dT/dx), dL)       , mV
+        K_cum = ...         # integral(K*(dT/dx), dL)*A     , W*mm
+        Rx_cum = ...        # integral(x/C, dL/A)           , mOhm.mm
+        Sx_cum = ...        # integral(x*S*(dT/dx), dL)     , mV.mm
         ST_cum = ...        # integral(T*S, dL)             , mV.mm
         return R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum
     
@@ -100,12 +99,11 @@ class BulkSegment(Segment):
     def Rth(self, x):
         return 1/self.props_x(x)[2]
     
-    @property
-    def profile(self):
+    def get_cums(self):
         Area = self.Area                # mm^2
         xi = self._xi                   # mm
         T_x = self._T_x                 # K
-        dT_x = (-1)*self._dT_x          # K/mm
+        dT_x = self._dT_x               # K/mm
         
         Rho_x = 1E4 / self._C(T_x)      # S/cm --> uOhm.m <--> mOhm.mm
         R_cum = trapz(Rho_x, xi)/Area   # mOhm
@@ -119,11 +117,11 @@ class BulkSegment(Segment):
         K_x = 1E-3 * self._K(T_x)       # W/(m.K) --> W/(mm.K)
         K_cum = trapz(K_x*dT_x, xi)*Area    # W*mm
         
-        # R_cum = ...         # integral(Rho, dL)/A           , mOhm
-        # S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        # K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W*mm
-        # Rx_cum = ...        # integral(x*Rho, dL/A)         , mOhm.mm
-        # Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
+        # R_cum = ...         # integral(1/C, dL)/A           , mOhm
+        # S_cum = ...         # integral(S*(dT/dx), dL)       , mV
+        # K_cum = ...         # integral(K*(dT/dx), dL)*A     , W*mm
+        # Rx_cum = ...        # integral(x/C, dL/A)           , mOhm.mm
+        # Sx_cum = ...        # integral(x*S*(dT/dx), dL)     , mV.mm
         # ST_cum = ...        # integral(T*S, dL)             , mV.mm
         return R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum
     
@@ -197,25 +195,24 @@ class LayerSegment(Segment):
         else:
             return value
     
-    @property
-    def profile(self):
+    def get_cums(self):
         Area = self.Area / 100          # mm^2 --> cm^2
         R_cum = 1E-3 * self.Rc/Area     # uOhm.cm^2/cm^2 --> mOhm
         Rx_cum = 0                      # mOhm.mm
         
         Ta, Tb = self.endtemp           # K
         S = 1E-3 * self.S               # uV/K --> mV/K
-        S_cum = S*(Ta-Tb)               # mV
+        S_cum = S*(Tb-Ta)               # mV
         Sx_cum = 0                      # mV.mm
         ST_cum = 0                      # mV.mm
 
         K_cum = 0                       # K = q*L/dT => 0 (L=0)
         
-        # R_cum = ...         # integral(Rho, dL)/A           , mOhm
-        # S_cum = ...         # integral(S*(-dT/dx), dL)      , mV
-        # K_cum = ...         # integral(K*(-dT/dx), dL)*A    , W/mm
-        # Rx_cum = ...        # integral(x*Rho, dL/A)         , mOhm.mm
-        # Sx_cum = ...        # integral(x*S*(-dT/dx), dL)    , mV.mm
+        # R_cum = ...         # integral(1/C, dL)/A           , mOhm
+        # S_cum = ...         # integral(S*(dT/dx), dL)       , mV
+        # K_cum = ...         # integral(K*(dT/dx), dL)*A     , W*mm
+        # Rx_cum = ...        # integral(x/C, dL/A)           , mOhm.mm
+        # Sx_cum = ...        # integral(x*S*(dT/dx), dL)     , mV.mm
         # ST_cum = ...        # integral(T*S, dL)             , mV.mm
         return R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum
     
@@ -383,7 +380,7 @@ class Element(ABC):
         Ta, Tb = self.endtemp
         Jphi_Ta = ((Ta-Tb)+I*(sum(ux_cums)-sum(phi_vx_cums)))/sum(vx_cums)
         Jphi_Tb = Jphi_Ta + I*phi_cum_v
-        Vdiff = -1E3*phi_cum_v    # phi_Ta - phi_Tb in mV
+        Vdiff = 1E3*phi_cum_v    # phi_Tb - phi_Ta in mV
         
         T_cum_v = Ta
         dT_x2 = []
@@ -404,6 +401,20 @@ class Element(ABC):
         Jphi2 = rst2[2:4]
         itol = Metric.RMSE(Jphi, Jphi2)
         return [itol,]             # W
+    
+    def _get_cums(self):
+        L_cum_v = 0
+        R_cums, S_cums, K_cums, Rx_cums, Sx_cums, ST_cums = 0, 0, 0, 0, 0, 0
+        for seg in self.segments:
+            R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum = seg.get_cums()
+            R_cums += R_cum                             # mOhm
+            S_cums += S_cum                             # mV
+            K_cums += K_cum                             # W*mm
+            Rx_cums += L_cum_v*R_cum + Rx_cum           # mOhm.mm
+            Sx_cums += L_cum_v*S_cum + Sx_cum           # mV.mm
+            ST_cums += ST_cum                           # mV.mm
+            L_cum_v += seg.Length                       # mm
+        return R_cums, S_cums, K_cums, Rx_cums, Sx_cums, ST_cums
     
     def _update_temp(self, dT_x, T_x, mixing=None):
         for seg, dT_x_i, T_x_i in zip(self.segments, dT_x, T_x):
@@ -490,7 +501,7 @@ class GenElement(Element):
         else:
             results = AttrDict()
             results['I'] = Ix
-            results['Vout'] = Vdiff
+            results['Vout'] = (-1)*Vdiff
             results['Qhot'] = Jphi_Th
             results['Pout'] = Jphi_Th - Jphi_Tc
             results['Yita'] = 100 * (1-Jphi_Tc/Jphi_Th)
@@ -530,17 +541,9 @@ class GenElement(Element):
         Ta, Tb = self.endtemp
         deltaT = Ta-Tb
         Ltot = self._Ltot
-        L_cum_v = 0
-        R_cums, S_cums, K_cums, Rx_cums, Sx_cums, ST_cums = 0, 0, 0, 0, 0, 0
-        for seg in self.segments:
-            R_cum, S_cum, K_cum, Rx_cum, Sx_cum, ST_cum = seg.profile
-            R_cums += R_cum                             # mOhm
-            S_cums += S_cum                             # mV
-            K_cums += K_cum                             # W*mm
-            Rx_cums += (L_cum_v*R_cum + Rx_cum)         # mOhm.mm
-            Sx_cums += L_cum_v*S_cum + Sx_cum           # mV.mm
-            ST_cums += ST_cum                           # mV.mm
-            L_cum_v += seg.Length                       # mm
+        R_cums, S_cums, K_cums, Rx_cums, Sx_cums, ST_cums = self._get_cums()
+        S_cums, Sx_cums, K_cums = (-1)*np.array([S_cums, Sx_cums, K_cums])
+        
         prfs = AttrDict()
         prfs['Voc'] = S_cums            # mV
         prfs['Rin'] = R_cums            # mOhm
