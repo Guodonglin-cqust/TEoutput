@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-from TEoutput.femout import BulkSegment, LayerSegment, GenElement
+from TEoutput.optimout import BulkSegment, LayerSegment, GenElement
 from TEoutput.utils import get_root_logger
 from numpy.polynomial import Polynomial as Poly
 import numpy as np
